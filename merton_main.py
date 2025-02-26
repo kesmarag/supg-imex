@@ -40,6 +40,9 @@ class DRM_Merton():
             loc=torch.tensor(np.array(muj)), covariance_matrix=torch.tensor(np.array(self.sigmaj)))
         self.date_str = self._folder_name()
         self.scheme = scheme
+        self.bar_b = self._create_bar_b()
+        self.bar_a = self._create_bar_a()
+        self.bb = self.bar_b.reshape(1,-1)*self.bar_b
         print(self.date_str)
 
     def _folder_name(self):
@@ -142,7 +145,25 @@ class DRM_Merton():
         return (self.iann(self.x)-1/q*df.reshape(-1,1))**2 #+ self.iann(0.01*self.x)**2
 
     # def _icost
-  
+
+
+    def _create_bar_b(self):
+        b = torch.zeros((self.dim,1))
+        for i in range(self.dim):
+            ki = np.exp(self.muj[i]+0.5*self.sigmaj[i][i]) - 1.0
+            for j in range(self.dim):
+                b[i,0] += 0.5*self.rho[i][j] * self.sigma[j] * self.sigma[i]
+            b[i,0] += (-self.r + 0.5*self.sigma[i]**2 + ki*self.lam)
+        return b.to(self.device)
+
+    def _create_bar_a(self):
+        a = torch.zeros((self.dim, self.dim))
+        for i in range(self.dim):
+            for j in range(self.dim):
+                a[i,j] = 0.5 * self.sigma[i]*self.rho[i][j]*self.sigma[j]
+        return a.to(self.device)
+
+    
     def _cost_function_euler(self, x):
         v = self.model(x)
         v0 = self.model(torch.zeros_like(x).to(self.device))
@@ -158,7 +179,10 @@ class DRM_Merton():
         dv_prev = torch.autograd.grad(v_prev,
                                       x,
                                       grad_outputs=torch.ones_like(v),
-                                      create_graph=True)[0]
+                                      create_graph=True,
+                                      retain_graph=True)[0]
+
+        
         penalty = torch.zeros_like(v)
         L = torch.zeros_like(v)
         f = torch.zeros_like(v)
@@ -171,12 +195,15 @@ class DRM_Merton():
             penalty += (di[str(i)]-target)**2.0
 
         for i in range(self.dim):
-            ki = np.exp(self.muj[i]+0.5*self.sigmaj[i][i]) - 1.0
-            rho_sigma = 0.0
+            # ki = np.exp(self.muj[i]+0.5*self.sigmaj[i][i]) - 1.0
+            # rho_sigma = 0.0
             for j in range(self.dim):
-                L += 0.25 * self.sigma[i]*self.rho[i][j]*self.sigma[j]*x[:,i].reshape(-1,1)*x[:,j].reshape(-1,1) * di[str(i)] * di[str(j)]
-                f += 0.5*self.rho[i][j] * self.sigma[j] * self.sigma[i] * x[:,i].reshape(-1,1)* di_prev[str(i)]
-            f += (-self.r + 0.5*self.sigma[i]**2 + ki*self.lam) * x[:,i].reshape(-1,1)* di_prev[str(i)]
+                # L += 0.25 * self.sigma[i]*self.rho[i][j]*self.sigma[j]*x[:,i].reshape(-1,1)*x[:,j].reshape(-1,1) * di[str(i)] * di[str(j)]
+                L += 0.5 * self.bar_a[i,j] *x[:,i].reshape(-1,1)*x[:,j].reshape(-1,1) * di[str(i)] * di[str(j)]
+                # b_tmp = 
+                # f += 0.5*self.rho[i][j] * self.sigma[j] * self.sigma[i] * x[:,i].reshape(-1,1)* di_prev[str(i)]
+            # f += (-self.r + 0.5*self.sigma[i]**2 + ki*self.lam) * x[:,i].reshape(-1,1)* di_prev[str(i)]
+            f += self.bar_b[i]* x[:,i].reshape(-1,1)* di_prev[str(i)]
         L += 0.5 * self.r * v * v
 
 
